@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>parkrun Volunteer Check-in</title>
+    <style>
+        :root { --pr-green: #00703c; --pr-orange: #ffc20e; --pr-red: #d9534f; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: #f0f2f5; margin: 0; padding-bottom: 60px; }
+        header { background: var(--pr-green); color: white; padding: 15px; text-align: center; font-weight: bold; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .controls { background: white; padding: 15px; border-bottom: 1px solid #ddd; display: flex; flex-direction: column; gap: 10px; }
+        .input-group { display: flex; gap: 8px; }
+        input[type="text"] { flex-grow: 1; padding: 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 1rem; }
+        .btn-load { background: var(--pr-orange); border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .btn-reset { background: #eee; border: 1px solid #ccc; padding: 8px; border-radius: 6px; font-size: 0.8rem; color: #666; }
+        
+        .list { padding: 10px; }
+        .card { background: white; margin-bottom: 12px; padding: 15px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 5px solid #ccc; transition: 0.2s; }
+        .card.checked { border-left-color: var(--pr-green); background: #f9fff9; }
+        .flex { display: flex; align-items: center; justify-content: space-between; }
+        .role { color: #666; font-size: 0.7rem; text-transform: uppercase; font-weight: bold; }
+        .name { font-size: 1.1rem; font-weight: 600; margin-top: 2px; }
+        input[type="checkbox"] { width: 28px; height: 28px; accent-color: var(--pr-green); cursor: pointer; }
+        .notes { width: 100%; margin-top: 10px; border: 1px solid #eee; padding: 10px; border-radius: 6px; box-sizing: border-box; font-size: 0.9rem; }
+        
+        #status { text-align: center; color: #666; padding: 20px; font-size: 0.9rem; }
+        .footer-info { font-size: 0.8rem; text-align: center; color: #888; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<header>parkrun Check-in</header>
+
+<div class="controls">
+    <div class="input-group">
+        <input type="text" id="event-name" placeholder="Event name (e.g. bushy)" />
+        <button class="btn-load" onclick="fetchRoster()">Load</button>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span id="roster-date" class="footer-info"></span>
+        <button class="btn-reset" onclick="resetAll()">Clear & Reset List</button>
+    </div>
+</div>
+
+<div id="status">Enter your event to get started.</div>
+<div id="roster-list" class="list"></div>
+
+<script>
+    let currentRoster = JSON.parse(localStorage.getItem('saved_roster')) || [];
+    let eventTitle = localStorage.getItem('saved_event_title') || "";
+
+    async function fetchRoster() {
+        const event = document.getElementById('event-name').value.toLowerCase().trim();
+        const status = document.getElementById('status');
+        if (!event) return alert("Please enter an event name");
+
+        status.innerHTML = "Connecting to parkrun servers... <br><small>This may take a few seconds.</small>";
+        
+        // CORS Proxy: AllOrigins
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.parkrun.org.uk/${event}/futureroster/`)}`;
+
+        try {
+            const response = await fetch(proxyUrl);
+            const data = await response.json();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(data.contents, 'text/html');
+            
+            // Extract the date of the next event
+            const dateHeader = doc.querySelector('h3');
+            const dateStr = dateHeader ? dateHeader.innerText : "Upcoming Event";
+
+            // Find the list items in the roster
+            const volunteerNodes = doc.querySelectorAll('ul.Archive_List li');
+
+            if (volunteerNodes.length === 0) {
+                status.innerText = "No roster found. Please check your event name spelling.";
+                return;
+            }
+
+            const newList = [];
+            volunteerNodes.forEach(node => {
+                const text = node.innerText;
+                if (text.includes(' - ')) {
+                    const [role, name] = text.split(' - ');
+                    newList.push({
+                        role: role.trim(),
+                        name: name.trim(),
+                        present: false,
+                        note: ""
+                    });
+                }
+            });
+
+            currentRoster = newList;
+            eventTitle = dateStr;
+            localStorage.setItem('saved_roster', JSON.stringify(currentRoster));
+            localStorage.setItem('saved_event_title', eventTitle);
+            
+            status.innerText = "";
+            render();
+        } catch (err) {
+            status.innerText = "Connection failed. Check your internet or try again.";
+            console.error(err);
+        }
+    }
+
+    function render() {
+        const container = document.getElementById('roster-list');
+        const dateEl = document.getElementById('roster-date');
+        
+        dateEl.innerText = eventTitle;
+        
+        if (currentRoster.length === 0) {
+            container.innerHTML = "";
+            return;
+        }
+
+        container.innerHTML = currentRoster.map((vol, index) => `
+            <div class="card ${vol.present ? 'checked' : ''}">
+                <div class="flex">
+                    <div onclick="toggleCheck(${index})" style="flex-grow:1">
+                        <div class="role">${vol.role}</div>
+                        <div class="name">${vol.name}</div>
+                    </div>
+                    <input type="checkbox" ${vol.present ? 'checked' : ''} 
+                           onchange="updateVol(${index}, 'present', this.checked)">
+                </div>
+                <input type="text" class="notes" placeholder="Add note..." 
+                       value="${vol.note || ''}" oninput="updateVol(${index}, 'note', this.value)">
+            </div>
+        `).join('');
+    }
+
+    function toggleCheck(index) {
+        currentRoster[index].present = !currentRoster[index].present;
+        saveAndRefresh();
+    }
+
+    function updateVol(index, field, value) {
+        currentRoster[index][field] = value;
+        saveAndRefresh();
+    }
+
+    function saveAndRefresh() {
+        localStorage.setItem('saved_roster', JSON.stringify(currentRoster));
+        render();
+    }
+
+    function resetAll() {
+        if (confirm("This will delete all current check-ins and notes. Are you sure?")) {
+            localStorage.removeItem('saved_roster');
+            localStorage.removeItem('saved_event_title');
+            currentRoster = [];
+            eventTitle = "";
+            document.getElementById('status').innerText = "List cleared. Enter event name to reload.";
+            render();
+        }
+    }
+
+    // Initialize
+    if (currentRoster.length > 0) {
+        document.getElementById('status').innerText = "";
+        render();
+    }
+</script>
+
+</body>
+</html>
